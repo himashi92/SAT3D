@@ -1,0 +1,15 @@
+numpy
+tensorboardx
+pyyaml
+yacs
+einops
+SimpleITK
+monai
+pandas
+torchio
+numpy
+matplotlib
+medpy
+h5py
+edt
+prefetch_generator
