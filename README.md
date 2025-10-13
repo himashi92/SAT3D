@@ -52,7 +52,7 @@ All the pre-trained models, figures, evaluations, a video on how the 3D slicer p
 - DOI: https://doi.org/10.6084/m9.figshare.30155497
 
 ## Trained Model Weights
-Download trained model weights from this shared drive [link](https://drive.google.com/drive/folders/1O8GmlquR2ZS6-PBTBp9d4GSWg06Z-uwa?usp=sharing).
+Download trained model weights from this shared drive [link](https://drive.google.com/drive/folders/1yV7-YMn9TpGaGHVmv2Vx-fFOuagT6L3n?usp=sharing).
 
 ## Running Demo
 The demonstration is created using 3D Slicer. The code for the slicer plugin is located in the SAT3D-slicer folder.
@@ -64,7 +64,7 @@ nohup python train_sat3D.py &> sat3D.out &
 
 ## Acknowledgements
 
-This repository makes liberal use of code from [SAM-Med3D](https://github.com/uni-medical/SAM-Med3D)
+This repository makes liberal use of code from [SAM-Med3D](https://github.com/uni-medical/SAM-Med3D) and [FastSAM3D_slicer](https://github.com/arcadelab/FastSAM3D_slicer/tree/main)
 
 ## Citing SAT3D
 
