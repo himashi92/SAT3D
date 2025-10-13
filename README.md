@@ -62,6 +62,11 @@ The demonstration is created using 3D Slicer. The code for the slicer plugin is 
 nohup python train_sat3D.py &> sat3D.out &
 ```
 
+## Demo 
+
+![Demo](img/demo.gif)
+
+
 ## Acknowledgements
 
 This repository makes liberal use of code from [SAM-Med3D](https://github.com/uni-medical/SAM-Med3D) and [FastSAM3D_slicer](https://github.com/arcadelab/FastSAM3D_slicer/tree/main)
