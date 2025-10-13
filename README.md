@@ -8,7 +8,7 @@ Here, we present Segment Any Tumour 3D (SAT3D), a volumetric foundation model de
 We benchmark SAT3D against three recent vision foundation models and nnUNet across 11 publicly available datasets, encompassing 3,884 tumour and cancer cases for training and 694 cases for in-distribution evaluation. Trained on 17,075 3D volume–mask pairs across multiple modalities and cancer primaries, SAT3D demonstrates strong generalisation and robustness. Extensive experiments highlight its effectiveness in improving segmentation accuracy under challenging and out-of-distribution scenarios, underscoring its potential as a scalable foundation model for medical image analysis.
 
 ## Link to full paper:
-TBZ
+TBA
 
 ## Proposed Architecture
 ![Proposed Architecture](img/sat3D.png?raw=true)
@@ -34,26 +34,22 @@ source venv/bin/activate
 
 ### Installation guide 
 
-- Install torch : 
-```bash
-pip3 install torch==1.10.2+cu113 torchvision==0.11.3+cu113 torchaudio==0.10.2+cu113 -f https://download.pytorch.org/whl/cu113/torch_stable.html
-```
-- Install other dependencies :
+- Install torch & other dependencies :
 ```bash 
 pip install -r requirements.txt
 ```
 
 ### Typical Install Time 
-This depends on the internet connection speed. It would take around 15-30 minutes to create environment and install all the dependencies required.
+This depends on the internet connection speed. It would take around 15-30 minutes to create the environment and install all the dependencies required.
 
 ## Dataset Preparation
-The experiments are conducted on 14 publicly available datasets. Data splits are provided in figshare project.
+The experiments are conducted on 14 publicly available datasets. Data splits are provided in the figshare project.
 
 
 ## Figshare Project Page
-All the pre-trained models, figures, evaluations, a video on how the training pipeline works, and the source code are included in this project page [link](https://figshare.com/s/a8c19cd60a57e975390b)
+All the pre-trained models, figures, evaluations, a video on how the 3D slicer plugin works, and the source code are included in this project page [link](https://figshare.com/s/a8c19cd60a57e975390b)
 
-- DOI : https://doi.org/10.6084/m9.figshare.30155497
+- DOI: https://doi.org/10.6084/m9.figshare.30155497
 
 ## Trained Model Weights
 Download trained model weights from this shared drive [link](https://drive.google.com/drive/folders/1O8GmlquR2ZS6-PBTBp9d4GSWg06Z-uwa?usp=sharing).
@@ -84,9 +80,5 @@ If you find this repository useful, please consider giving us a star ⭐ and cit
         publisher={Nature Publishing Group UK London
       }
 }
-```
-
-```bash
-      Peiris, Himashi (2023): Project Contributions. figshare. Journal contribution. https://doi.org/10.6084/m9.figshare.22140194.v5
 ```
 
