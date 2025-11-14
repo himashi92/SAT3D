@@ -76,7 +76,14 @@ This repository makes liberal use of code from [SAM-Med3D](https://github.com/un
 If you find this repository useful, please consider giving us a star ⭐ and cite our work:
 
 ```bash
-
+@misc{peiris2025segmenttumouruncertaintyawarevision,
+      title={Segment Any Tumour: An Uncertainty-Aware Vision Foundation Model for Whole-Body Analysis}, 
+      author={Himashi Peiris and Sizhe Wang and Gary Egan and Mehrtash Harandi and Meng Law and Zhaolin Chen},
+      year={2025},
+      eprint={2511.09592},
+      archivePrefix={arXiv},
+      primaryClass={eess.IV},
+      url={https://arxiv.org/abs/2511.09592}, 
 }
 ```
 
