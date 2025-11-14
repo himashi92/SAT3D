@@ -8,7 +8,7 @@ Here, we present Segment Any Tumour 3D (SAT3D), a volumetric foundation model de
 We benchmark SAT3D against three recent vision foundation models and nnUNet across 11 publicly available datasets, encompassing 3,884 tumour and cancer cases for training and 694 cases for in-distribution evaluation. Trained on 17,075 3D volume–mask pairs across multiple modalities and cancer primaries, SAT3D demonstrates strong generalisation and robustness. Extensive experiments highlight its effectiveness in improving segmentation accuracy under challenging and out-of-distribution scenarios, underscoring its potential as a scalable foundation model for medical image analysis.
 
 ## Link to full paper:
-TBA
+Pre-print version: https://arxiv.org/abs/2511.09592
 
 ## Proposed Architecture
 ![Proposed Architecture](img/sat3D.png?raw=true)
