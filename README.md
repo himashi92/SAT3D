@@ -1,6 +1,7 @@
 # Segment Any Tumour: An Uncertainty-Aware Vision Foundation Model for Whole-Body Analysis
 This repo contains the supported pytorch code and configuration files to reproduce the results of Segment Any Tumour: An Uncertainty-Aware Vision Foundation Model for Whole-Body Analysis Article.
 
+![Banner](img/Banner.png?raw=true)
 ## Abstract
 
 Prompt-driven vision foundation models, such as the Segment Anything Model (SAM), have recently demonstrated remarkable adaptability in computer vision. However, their direct application to medical imaging remains challenging due to heterogeneous tissue structures, imaging artefacts, and low-contrast boundaries, particularly in tumours and cancer primaries leading to suboptimal segmentation in ambiguous or overlapping lesion regions.
@@ -11,7 +12,7 @@ We benchmark SAT3D against three recent vision foundation models and nnUNet acro
 Pre-print version: [https://www.nature.com/articles/s41467-026-76531-2](https://www.nature.com/articles/s41467-026-76531-2)
 
 ## Proposed Architecture
-![Proposed Architecture](img/sat3D.png?raw=true)
+![Proposed Architecture](img/SAT3D.png?raw=true)
 
 ## System requirements
 Under this section, we provide details on the environmental setup and dependencies required to train/test the SAT3D model.
