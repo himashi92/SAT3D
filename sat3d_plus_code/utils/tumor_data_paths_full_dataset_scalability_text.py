@@ -20,7 +20,7 @@ all_classes = [
     'gtvp',
     'gtvn',
     'colon_cancer_primaries',
-    'edema'
+    'edema',
     'enhancing_tumor',
     'hepatic_tumor',
     'kidney_tumor',
