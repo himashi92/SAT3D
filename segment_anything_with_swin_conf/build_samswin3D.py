@@ -11,7 +11,7 @@ from functools import partial
 from .modeling import ImageEncoderViT3D, MaskDecoder3D, PromptEncoder3D, Sam3D, SwinTransformer
 
 
-def build_sam3D_swin2(checkpoint=None):
+def build_sam3D_swin(checkpoint=None):
     return _build_sam3D_swinc(
         prompt_embed_dim=384,
         encoder_embed_dim=48,
