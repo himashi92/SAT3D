@@ -1,266 +1,616 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>fastsam</class>
- <widget class="qMRMLWidget" name="fastsam">
+ <class>sat3D</class>
+ <widget class="qMRMLWidget" name="sat3D">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>452</width>
-    <height>1276</height>
+    <width>420</width>
+    <height>1300</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>SAT3D</string>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout_2">
+  <layout class="QVBoxLayout" name="mainLayout">
    <item>
-    <layout class="QVBoxLayout" name="verticalLayout">
-     <item alignment="Qt::AlignHCenter">
-      <widget class="QLabel" name="fastsam_label">
-       <property name="font">
-        <font>
-         <pointsize>18</pointsize>
-        </font>
-       </property>
-       <property name="text">
-        <string>SAT3D</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QWidget" name="verticalWidget_3" native="true">
-       <layout class="QVBoxLayout" name="verticalLayout_8">
-        <item>
-         <widget class="QTabWidget" name="tabWidget">
-          <widget class="QWidget" name="tab">
-           <attribute name="title">
-            <string>Inputs and View</string>
-           </attribute>
-           <layout class="QVBoxLayout" name="verticalLayout_10">
-            <item>
-             <widget class="QWidget" name="widget" native="true">
-              <layout class="QVBoxLayout" name="verticalLayout_12">
-               <item>
-                <spacer name="horizontalSpacer">
-                 <property name="orientation">
-                  <enum>Qt::Horizontal</enum>
-                 </property>
-                 <property name="sizeHint" stdset="0">
-                  <size>
-                   <width>0</width>
-                   <height>0</height>
-                  </size>
-                 </property>
-                </spacer>
-               </item>
-               <item>
-                <widget class="QLabel" name="label_seed">
-                 <property name="text">
-                  <string>Seed Value</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QLineEdit" name="randomSeed">
-                 <property name="placeholderText">
-                  <string>None</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <spacer name="horizontalSpacer_2">
-                 <property name="orientation">
-                  <enum>Qt::Horizontal</enum>
-                 </property>
-                 <property name="sizeHint" stdset="0">
-                  <size>
-                   <width>40</width>
-                   <height>10</height>
-                  </size>
-                 </property>
-                </spacer>
-               </item>
-               <item>
-                <widget class="QGroupBox" name="groupBox">
-                 <layout class="QHBoxLayout" name="horizontalLayout_2">
-                  <item>
-                   <layout class="QVBoxLayout" name="verticalLayout_3">
-                    <item>
-                     <widget class="QLabel" name="label_2">
-                      <property name="text">
-                       <string>Volume Node</string>
-                      </property>
-                     </widget>
-                    </item>
-                    <item>
-                     <widget class="qMRMLNodeComboBox" name="comboVolumeNode">
-                      <property name="enabled">
-                       <bool>true</bool>
-                      </property>
-                      <property name="nodeTypes">
-                       <stringlist notr="true">
-                        <string>vtkMRMLVolumeNode</string>
-                       </stringlist>
-                      </property>
-                      <property name="hideChildNodeTypes">
-                       <stringlist notr="true"/>
-                      </property>
-                     </widget>
-                    </item>
-                   </layout>
-                  </item>
-                  <item>
-                   <layout class="QVBoxLayout" name="verticalLayout_7"/>
-                  </item>
-                 </layout>
-                </widget>
-               </item>
-               <item>
-                <spacer name="horizontalSpacer_3">
-                 <property name="orientation">
-                  <enum>Qt::Horizontal</enum>
-                 </property>
-                 <property name="sizeHint" stdset="0">
-                  <size>
-                   <width>40</width>
-                   <height>20</height>
-                  </size>
-                 </property>
-                </spacer>
-               </item>
-               <item>
-                <widget class="QPushButton" name="selfensembling">
-                 <property name="text">
-                  <string>Run AI Model Prediction</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="endTask">
-                 <property name="text">
-                  <string>End Segmentation Refinement</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </widget>
-            </item>
-           </layout>
-          </widget>
-         </widget>
-        </item>
-       </layout>
-      </widget>
-     </item>
-    </layout>
+    <widget class="ctkCollapsibleButton" name="inputCollapsible">
+     <property name="text">
+      <string>Input</string>
+     </property>
+     <layout class="QFormLayout" name="inputLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="volumeLabel">
+        <property name="text">
+         <string>Volume:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="qMRMLNodeComboBox" name="comboVolumeNode">
+        <property name="toolTip">
+         <string>Scan to segment</string>
+        </property>
+        <property name="nodeTypes">
+         <stringlist notr="true">
+          <string>vtkMRMLScalarVolumeNode</string>
+         </stringlist>
+        </property>
+        <property name="showChildNodeTypes">
+         <bool>false</bool>
+        </property>
+        <property name="addEnabled">
+         <bool>false</bool>
+        </property>
+        <property name="removeEnabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
    </item>
    <item>
-    <layout class="QVBoxLayout" name="verticalLayout_9"/>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBox_3">
-     <layout class="QVBoxLayout" name="verticalLayout_19">
+    <widget class="ctkCollapsibleButton" name="promptsCollapsible">
+     <property name="text">
+      <string>Prompts</string>
+     </property>
+     <layout class="QVBoxLayout" name="promptsLayout">
       <item>
-       <widget class="QTabWidget" name="tabWidget_2">
-        <widget class="QWidget" name="tab_4">
-         <attribute name="title">
-          <string>Segmentation Tools</string>
-         </attribute>
-         <layout class="QVBoxLayout" name="verticalLayout_11">
-          <item>
-           <widget class="QGroupBox" name="groupBox">
-            <layout class="QVBoxLayout" name="verticalLayout_17">
-             <item>
-              <widget class="qMRMLSegmentSelectorWidget" name="segmentSelector"/>
-             </item>
-             <item>
-              <widget class="qMRMLSegmentsTableView" name="segmentsTable">
-               <property name="maximumSize">
-                <size>
-                 <width>16777215</width>
-                 <height>8000000</height>
-                </size>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
-          <item>
-           <widget class="QGroupBox" name="groupBox">
-            <layout class="QHBoxLayout" name="horizontalLayout_6">
-             <item>
-              <layout class="QVBoxLayout" name="verticalLayout_5">
-               <item>
-                <widget class="QLabel" name="label">
-                 <property name="text">
-                  <string>Segment</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pushSegmentAdd">
-                 <property name="text">
-                  <string>Add</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QPushButton" name="pushSegmentRemove">
-                 <property name="text">
-                  <string>Remove</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-            </layout>
-           </widget>
-          </item>
-          <item>
-           <widget class="QGroupBox" name="verticalGroupBox_7">
-            <layout class="QVBoxLayout" name="verticalLayout_18">
-             <item>
-              <widget class="QLabel" name="prompts_label">
-               <property name="text">
-                <string>SAM Point Prompts</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="qSlicerSimpleMarkupsWidget" name="markupsInclude">
-               <property name="toolTip">
-                <string>Place include-point (keyboard shortcut: 'i')</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="qSlicerSimpleMarkupsWidget" name="markupsExclude">
-               <property name="toolTip">
-                <string>Place exclude-point (keyboard shortcut: 'e')</string>
-               </property>
-              </widget>
-             </item>
-            </layout>
-           </widget>
-          </item>
-         </layout>
-        </widget>
+       <widget class="QLabel" name="includeLabel">
+        <property name="text">
+         <string>Include points (shortcut: 1)</string>
+        </property>
        </widget>
       </item>
       <item>
-       <spacer name="verticalSpacer_3">
-        <property name="orientation">
-         <enum>Qt::Vertical</enum>
+       <widget class="qSlicerSimpleMarkupsWidget" name="markupsInclude">
+        <property name="toolTip">
+         <string>Click inside the lesion to add include points (keyboard shortcut: '1')</string>
         </property>
-        <property name="sizeHint" stdset="0">
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="excludeLabel">
+        <property name="text">
+         <string>Exclude points (shortcut: 2)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="qSlicerSimpleMarkupsWidget" name="markupsExclude">
+        <property name="toolTip">
+         <string>Click on wrongly segmented regions to add exclude points (keyboard shortcut: '2')</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkCollapsibleGroupBox" name="boxGroup">
+        <property name="title">
+         <string>Box</string>
+        </property>
+        <layout class="QHBoxLayout" name="boxLayout">
+         <item>
+          <widget class="QPushButton" name="pushPlaceBox">
+           <property name="toolTip">
+            <string>Click two corners in a slice view; adjust the box's depth with its handles in the other views</string>
+           </property>
+           <property name="text">
+            <string>Draw Box</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushRemoveBox">
+           <property name="text">
+            <string>Remove Box</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="ctkCollapsibleGroupBox" name="scribbleGroup">
+        <property name="title">
+         <string>Brush scribbles</string>
+        </property>
+        <layout class="QVBoxLayout" name="scribbleLayout">
+         <item>
+          <layout class="QHBoxLayout" name="brushButtonsLayout">
+           <item>
+            <widget class="QPushButton" name="pushBrushInclude">
+             <property name="toolTip">
+              <string>Paint an include stroke (sampled into points)</string>
+             </property>
+             <property name="text">
+              <string>Brush +</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="pushBrushExclude">
+             <property name="toolTip">
+              <string>Paint an exclude stroke (sampled into points)</string>
+             </property>
+             <property name="text">
+              <string>Brush −</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="pushBrushErase">
+             <property name="text">
+              <string>Erase</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item>
+          <widget class="QWidget" name="scribbleEditorPlaceholder" native="true">
+           <layout class="QVBoxLayout" name="scribbleEditorLayout">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <layout class="QFormLayout" name="textLayout">
+        <item row="0" column="0">
+         <widget class="QLabel" name="textLabel">
+          <property name="text">
+           <string>Text (optional):</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="QLineEdit" name="textPrompt">
+          <property name="toolTip">
+           <string>Free-text description; must be combined with at least one point, scribble or box</string>
+          </property>
+          <property name="placeholderText">
+           <string>e.g. enhancing tumour</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QPushButton" name="pushClearPoints">
+        <property name="toolTip">
+         <string>Remove all points, scribbles, the box and the text of the current segment (keyboard shortcut: 'a')</string>
+        </property>
+        <property name="text">
+         <string>Clear Prompts</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="runCollapsible">
+     <property name="text">
+      <string>Segmentation (AI)</string>
+     </property>
+     <layout class="QVBoxLayout" name="runLayout">
+      <item>
+       <widget class="QPushButton" name="selfensembling">
+        <property name="minimumSize">
          <size>
-          <width>20</width>
-          <height>40</height>
+          <width>0</width>
+          <height>32</height>
          </size>
         </property>
-       </spacer>
+        <property name="toolTip">
+         <string>Segment the selected segment from the prompts; add more prompts and run again to refine</string>
+        </property>
+        <property name="text">
+         <string>Run / Refine</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QFormLayout" name="thresholdLayout">
+        <item row="0" column="0">
+         <widget class="QLabel" name="thresholdLabel">
+          <property name="text">
+           <string>Confidence threshold:</string>
+          </property>
+         </widget>
+        </item>
+        <item row="0" column="1">
+         <widget class="ctkSliderWidget" name="thresholdSlider">
+          <property name="toolTip">
+           <string>Re-binarises the last run's probabilities instantly (no re-inference)</string>
+          </property>
+          <property name="singleStep">
+           <double>0.010000000000000</double>
+          </property>
+          <property name="minimum">
+           <double>0.010000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>0.990000000000000</double>
+          </property>
+          <property name="value">
+           <double>0.500000000000000</double>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="showUncertaintyCheckBox">
+        <property name="toolTip">
+         <string>Critic's per-voxel error estimate around the prediction: blue = relatively certain, red = relatively likely mis-segmented. A ranking within this case, not an absolute probability.</string>
+        </property>
+        <property name="text">
+         <string>Show model uncertainty (critic)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="refineButtonsLayout">
+        <item>
+         <widget class="QPushButton" name="pushUndo">
+          <property name="toolTip">
+           <string>Restore the mask from before the last run (keyboard shortcut: 'z')</string>
+          </property>
+          <property name="text">
+           <string>Undo Last Run</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushClearSegment">
+          <property name="toolTip">
+           <string>Empty the current segment and clear its prompts</string>
+          </property>
+          <property name="text">
+           <string>Clear Segment</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QLabel" name="statusLabel">
+        <property name="text">
+         <string/>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="segmentsCollapsible">
+     <property name="text">
+      <string>Segments and Review</string>
+     </property>
+     <layout class="QVBoxLayout" name="segmentsLayout">
+      <item>
+       <widget class="qMRMLSegmentSelectorWidget" name="segmentSelector"/>
+      </item>
+      <item>
+       <widget class="qMRMLSegmentsTableView" name="segmentsTable"/>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="segmentButtonsLayout">
+        <item>
+         <widget class="QPushButton" name="pushSegmentAdd">
+          <property name="toolTip">
+           <string>Start a new lesion with its own prompts (keyboard shortcut: 'n')</string>
+          </property>
+          <property name="text">
+           <string>Accept &amp;&amp; New Segment</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushSegmentRemove">
+          <property name="text">
+           <string>Remove</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushApprove">
+          <property name="toolTip">
+           <string>Mark the current segment as reviewed (bookkeeping only; saved with the segmentation)</string>
+          </property>
+          <property name="text">
+           <string>Approve</string>
+          </property>
+          <property name="checkable">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QTableWidget" name="measurementsTable">
+        <property name="toolTip">
+         <string>Volume and longest linear diameter, computed from each segment and the scan's voxel spacing</string>
+        </property>
+        <property name="editTriggers">
+         <set>QAbstractItemView::NoEditTriggers</set>
+        </property>
+        <property name="selectionMode">
+         <enum>QAbstractItemView::NoSelection</enum>
+        </property>
+        <attribute name="verticalHeaderVisible">
+         <bool>false</bool>
+        </attribute>
+        <attribute name="horizontalHeaderStretchLastSection">
+         <bool>true</bool>
+        </attribute>
+        <column>
+         <property name="text">
+          <string>Segment</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>Volume (cm³)</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>Diameter (mm)</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
+          <string>Approved</string>
+         </property>
+        </column>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="outputButtonsLayout">
+        <item>
+         <widget class="QPushButton" name="pushSave">
+          <property name="toolTip">
+           <string>Write a multi-label NIfTI (segment i = label i) plus a prompt-provenance JSON per segment</string>
+          </property>
+          <property name="text">
+           <string>Save Segmentation...</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="endTask">
+          <property name="toolTip">
+           <string>Finish this case and restart Slicer</string>
+          </property>
+          <property name="text">
+           <string>End Task</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkCollapsibleButton" name="advancedCollapsible">
+     <property name="text">
+      <string>Advanced</string>
+     </property>
+     <property name="collapsed">
+      <bool>true</bool>
+     </property>
+     <layout class="QFormLayout" name="advancedLayout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="samWeightsLabel">
+        <property name="text">
+         <string>SAT3D weights:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkPathLineEdit" name="samWeightsPath"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="criticWeightsLabel">
+        <property name="text">
+         <string>Critic weights:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="ctkPathLineEdit" name="criticWeightsPath"/>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="textEncoderLabel">
+        <property name="text">
+         <string>Text encoder:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="ctkPathLineEdit" name="textEncoderPath">
+        <property name="toolTip">
+         <string>Folder with the PubMedBERT config and tokenizer (weights come from the SAT3D checkpoint)</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="deviceLabel">
+        <property name="text">
+         <string>Device:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QComboBox" name="deviceCombo">
+        <item>
+         <property name="text">
+          <string>auto</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>cuda</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>cpu</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="label_seed">
+        <property name="text">
+         <string>Seed:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QSpinBox" name="randomSeed">
+        <property name="maximum">
+         <number>2147483647</number>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="roiMarginLabel">
+        <property name="text">
+         <string>ROI margin (voxels):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QSpinBox" name="roiMarginSpin">
+        <property name="maximum">
+         <number>64</number>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0">
+       <widget class="QLabel" name="scribbleStrideLabel">
+        <property name="text">
+         <string>Scribble stride (voxels):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="1">
+       <widget class="QSpinBox" name="scribbleStrideSpin">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>20</number>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0">
+       <widget class="QLabel" name="maxScribbleLabel">
+        <property name="text">
+         <string>Max scribble points:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="1">
+       <widget class="QSpinBox" name="maxScribbleSpin">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>2000</number>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="0">
+       <widget class="QLabel" name="boxDepthLabel">
+        <property name="text">
+         <string>Flat box depth (slices):</string>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="1">
+       <widget class="QSpinBox" name="boxDepthSpin">
+        <property name="toolTip">
+         <string>Through-plane depth given to a box drawn flat in one view</string>
+        </property>
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>128</number>
+        </property>
+       </widget>
+      </item>
+      <item row="9" column="0" colspan="2">
+       <widget class="QCheckBox" name="autoSaveCheckBox">
+        <property name="toolTip">
+         <string>Save every run's mask and prompts to the session folder next to the scan</string>
+        </property>
+        <property name="text">
+         <string>Auto-save each run to the session folder</string>
+        </property>
+       </widget>
+      </item>
+      <item row="10" column="0">
+       <widget class="QLabel" name="modelStatusTitle">
+        <property name="text">
+         <string>Model:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="10" column="1">
+       <layout class="QHBoxLayout" name="modelStatusLayout">
+        <item>
+         <widget class="QLabel" name="modelStatusLabel">
+          <property name="text">
+           <string>not loaded</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushReloadModel">
+          <property name="toolTip">
+           <string>Unload the model; it reloads with the current settings on the next run</string>
+          </property>
+          <property name="text">
+           <string>Unload</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
      </layout>
     </widget>
@@ -281,6 +631,28 @@
   </layout>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>ctkCollapsibleButton</class>
+   <extends>QWidget</extends>
+   <header>ctkCollapsibleButton.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkCollapsibleGroupBox</class>
+   <extends>QGroupBox</extends>
+   <header>ctkCollapsibleGroupBox.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkPathLineEdit</class>
+   <extends>QWidget</extends>
+   <header>ctkPathLineEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>ctkSliderWidget</class>
+   <extends>QWidget</extends>
+   <header>ctkSliderWidget.h</header>
+  </customwidget>
   <customwidget>
    <class>qMRMLNodeComboBox</class>
    <extends>QWidget</extends>
@@ -317,84 +689,34 @@
  <resources/>
  <connections>
   <connection>
-   <sender>fastsam</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>markupsInclude</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-   </hints>
-  </connection>
-  <connection>
-   <sender>fastsam</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>segmentsTable</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-   </hints>
-  </connection>
-  <connection>
-   <sender>fastsam</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>segmentSelector</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-   </hints>
-  </connection>
-  <connection>
-   <sender>fastsam</sender>
-   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
-   <receiver>markupsExclude</receiver>
-   <slot>setMRMLScene(vtkMRMLScene*)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-   </hints>
-  </connection>
-  <connection>
-   <sender>fastsam</sender>
+   <sender>sat3D</sender>
    <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
    <receiver>comboVolumeNode</receiver>
    <slot>setMRMLScene(vtkMRMLScene*)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>20</x>
-     <y>20</y>
-    </hint>
-   </hints>
+  </connection>
+  <connection>
+   <sender>sat3D</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>markupsInclude</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+  <connection>
+   <sender>sat3D</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>markupsExclude</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+  <connection>
+   <sender>sat3D</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>segmentSelector</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+  <connection>
+   <sender>sat3D</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>segmentsTable</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
   </connection>
  </connections>
 </ui>

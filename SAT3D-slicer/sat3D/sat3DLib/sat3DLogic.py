@@ -1,508 +1,539 @@
+"""Model loading, inference orchestration, display and I/O for the SAT3D Slicer module.
+
+Heavy dependencies (PyTorch, TorchIO, transformers, the model code) are imported lazily in
+``ensureDependencies`` so the module still loads in a fresh Slicer and can offer to install them.
+The model itself runs in ``engine.InferenceEngine`` (ported from SAT3D Studio), on a worker
+thread so Slicer stays responsive; everything touching MRML stays on the main thread.
+"""
+import importlib.util
+import json
+import logging
 import os
 import random
-import shutil
-import sys
-import contextlib
+import threading
+import time
 from datetime import datetime
 
-import SimpleITK as sitk
 import numpy as np
 import qt
 import slicer
 import vtk
+from slicer.ScriptedLoadableModule import ScriptedLoadableModuleLogic
 
-from slicer.ScriptedLoadableModule import *
-from segment_anything_with_swin_conf2.build_samswin3D import sam_model_registry3D
-from networks import Discriminator
+from .engine import InferenceEngine, Prompts, SegmentState, measure_mask, preprocess_volume
 
-# deps
-try:
-    import timm, monai, einops, torchio as tio
-except ModuleNotFoundError:
-    if slicer.util.confirmOkCancelDisplay("This module requires some Python packages. Click OK to install now."):
-        slicer.util.pip_install("einops")
-        slicer.util.pip_install("monai")
-        slicer.util.pip_install("typer")
-        slicer.util.pip_install("timm")
-        slicer.util.pip_install("torchio")
-        slicer.util.pip_install("medpy")
-        slicer.util.pip_install("h5py")
-        slicer.util.pip_install("yacs")
-        slicer.util.pip_install("matplotlib")
+logger = logging.getLogger("SAT3D")
 
-import torch.nn.functional as F
-from monai.data import decollate_batch
+# Parameter node references / parameters (names kept for compatibility with saved scenes)
+INPUT_VOLUME_REF = "fastsamInputVolume"
+INCLUDE_POINTS_REF = "fastsamIncludePoints"
+EXCLUDE_POINTS_REF = "fastsamExcludePoints"
+SEGMENTATION_REF = "fastsamSegmentation"
+CURRENT_SEGMENT_PARAM = "fastsamCurrentSegment"
+BOX_REF = "sat3dBox"
+SCRIBBLE_SEGMENTATION_REF = "sat3dScribbles"
+UNCERTAINTY_VOLUME_REF = "sat3dUncertainty"
 
-# your local sliding window
-from .utils_monai_bts import sliding_window_inference
+DEFAULT_SEGMENT_NAME = "Tumor"
+DEFAULT_SEGMENT_COLOR = (1.0, 215 / 255.0, 0.0)
+SEG_ADDED, SEG_REMOVED = "Δ Added", "Δ Removed"
+DELTA_COLORS = {SEG_ADDED: (56 / 255.0, 163 / 255.0, 63 / 255.0), SEG_REMOVED: (145 / 255.0, 60 / 255.0, 66 / 255.0)}
+DELTA_SEGMENT_NAMES = tuple(DELTA_COLORS)
+SCRIBBLE_POS, SCRIBBLE_NEG = "Scribble +", "Scribble −"
+APPROVED_TAG = "SAT3D.Approved"
+
+# pip requirements of the model / inference code (torch itself is handled by PyTorchUtils)
+REQUIRED_PACKAGES = {"einops": "einops", "timm": "timm", "torchio": "torchio",
+                     "transformers": "transformers>=4.40,<4.46"}  # newer transformers needs torch>=2.2
+MIN_TORCH_VERSION = "2.1"
+MIN_TORCHVISION_VERSION = "0.16"
+TORCH_COMPUTATION_BACKEND = "cu121"  # set to None to let PyTorchUtils auto-detect
+
+UNDO_DEPTH = 5
+MODULE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DOWNLOADS = qt.QStandardPaths.writableLocation(qt.QStandardPaths.DownloadLocation)
 
 
-VAL_AMP = True
+class Settings:
+    """User preferences, persisted in Slicer's settings under ``SAT3D/``."""
+    DEFAULTS = {
+        "samCheckpoint": os.path.join(DOWNLOADS, "sam_model_dice_best.pth"),
+        "criticCheckpoint": os.path.join(DOWNLOADS, "critic_dice_best.pth"),
+        "textEncoderDir": os.path.join(MODULE_DIR, "Resources", "TextEncoder"),
+        "device": "auto",           # auto | cuda | cpu
+        "seed": 2025,
+        "roiMargin": 8,             # voxels around the prompts when choosing the 128^3 crop
+        "scribbleStride": 3,        # one point per stride^3 painted cell
+        "maxScribblePoints": 200,
+        "boxDepth": 20,             # slices, for boxes drawn flat in one view
+        "autoSaveRuns": True,       # write each run's mask to the session folder
+    }
+
+    def __getattr__(self, name):
+        if name not in Settings.DEFAULTS:
+            raise AttributeError(name)
+        default = Settings.DEFAULTS[name]
+        value = slicer.app.userSettings().value(f"SAT3D/{name}", default)
+        if isinstance(default, bool):
+            return value if isinstance(value, bool) else str(value).lower() == "true"
+        return type(default)(value)
+
+    def set(self, name, value):
+        slicer.app.userSettings().setValue(f"SAT3D/{name}", value)
 
 
-class Logger(object):
-    def __init__(self, logfile):
-        self.terminal = sys.__stdout__
-        self.log = open(logfile, "a")
-    def write(self, message):
-        self.terminal.write(message); self.log.write(message)
-    def flush(self):
-        self.terminal.flush(); self.log.flush()
+def worldToVoxel(volumeNode, worldPos):
+    """World (RAS) position -> (d, h, w) voxel index of ``volumeNode`` (honours parent transforms)."""
+    worldToVolume = vtk.vtkGeneralTransform()
+    slicer.vtkMRMLTransformNode.GetTransformBetweenNodes(None, volumeNode.GetParentTransformNode(), worldToVolume)
+    ras = worldToVolume.TransformPoint(worldPos)
+    rasToIjk = vtk.vtkMatrix4x4()
+    volumeNode.GetRASToIJKMatrix(rasToIjk)
+    i, j, k = rasToIjk.MultiplyPoint([*ras, 1.0])[:3]
+    return int(round(k)), int(round(j)), int(round(i))
+
+
+def volumeShape(volumeNode):
+    w, h, d = volumeNode.GetImageData().GetDimensions()
+    return d, h, w
+
+
+def isVoxelInVolume(volumeNode, voxel):
+    return all(0 <= v < n for v, n in zip(voxel, volumeShape(volumeNode)))
+
+
+def saveMaskAsNifti(mask, referenceVolumeNode, path):
+    """Save a (D, H, W) label array with the geometry of ``referenceVolumeNode`` (RAS -> LPS)."""
+    import SimpleITK as sitk
+    ijkToRas = vtk.vtkMatrix4x4()
+    referenceVolumeNode.GetIJKToRASMatrix(ijkToRas)
+    spacing = referenceVolumeNode.GetSpacing()
+    rasToLps = (-1.0, -1.0, 1.0)
+    image = sitk.GetImageFromArray(np.ascontiguousarray(mask, dtype=np.uint8))
+    image.SetSpacing(spacing)
+    image.SetOrigin([rasToLps[r] * ijkToRas.GetElement(r, 3) for r in range(3)])
+    image.SetDirection([rasToLps[r] * ijkToRas.GetElement(r, c) / spacing[c] for r in range(3) for c in range(3)])
+    sitk.WriteImage(image, path, useCompression=True)
+
+
+def safeName(name):
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
 
 
 class sat3DLogic(ScriptedLoadableModuleLogic):
     def __init__(self):
         ScriptedLoadableModuleLogic.__init__(self)
-        self._parameterNode = self.getParameterNode()
-
-        self.download_location = qt.QStandardPaths.writableLocation(qt.QStandardPaths.DownloadLocation)
-        self.sam, self.critic, self.device = None, None, None
+        self.settings = Settings()
         self.torch = None
+        self.engine = None
+        self._logHandler = None
+        self._job = None
+        self.resetCase()
 
-        # I/O + sizing
-        self.image_size = 128
+    # ---------- case / session ----------
+    def resetCase(self, volumeNode=None):
+        """Forget all refinement state. The session folder/log for ``volumeNode`` is opened on first use."""
+        self.caseName = volumeNode.GetName() if volumeNode else None
+        self._caseVolume = volumeNode
+        self.segmentStates = {}
+        self.undoStacks = {}
+        self._normVolume = None
+        self._normVolumeKey = None
+        self._sessionDir = None
+        self._closeSessionLog()
+        self._emptyCache()
 
-        # prompts
-        self.include_coords = {}
-        self.exclude_coords = {}
-        self._prev_include_set = set()
-        self._prev_exclude_set = set()
+    @property
+    def sessionDir(self):
+        """``<scan folder>/<case>_sat3d_session`` (Downloads if the scan has no file), created with its log on
+        first use -- resolved lazily because a just-loaded volume gets its storage node after it is selected."""
+        if self._sessionDir is None and self._caseVolume is not None:
+            storage = self._caseVolume.GetStorageNode()
+            source = storage.GetFileName() if storage and storage.GetFileName() else None
+            base = os.path.dirname(source) if source else DOWNLOADS
+            self._sessionDir = os.path.join(base, f"{safeName(self.caseName)}_sat3d_session")
+            os.makedirs(self._sessionDir, exist_ok=True)
+            self._logHandler = logging.FileHandler(os.path.join(self._sessionDir, "session_log.txt"), encoding="utf-8")
+            self._logHandler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+            logger.addHandler(self._logHandler)
+            logger.setLevel(logging.INFO)
+            logger.info(f"OPENED: {source or self.caseName} shape={volumeShape(self._caseVolume)}")
+        return self._sessionDir
 
-        # state
-        self.slice_direction = 'Red'
-        self.dimension = 3
+    def _closeSessionLog(self):
+        if self._logHandler is not None:
+            logger.removeHandler(self._logHandler)
+            self._logHandler.close()
+            self._logHandler = None
 
-        # outputs
-        self.mask = np.zeros((1, 1, 1))
-        self.mask_backup = None
-        self.iteration = 0
-        self.save_points = None
-        self.save_labels = None
-        self.current_task_name = None
-        self.out_dir = None
-        self.log_file_name = None
+    def log(self, message):
+        """Write to the current case's session log (opening it if needed)."""
+        _ = self.sessionDir
+        logger.info(message)
 
-        self.mask_locations = set()
-        self.interp_slice_direction = set()
+    def segmentState(self, segmentId):
+        return self.segmentStates.setdefault(segmentId, SegmentState())
 
-        # cache for refinement (torch on device, keep fp16 on CUDA)
-        self.visible_prev_mask = None
-        self.prev_mask_ = None
+    def forgetSegment(self, segmentId):
+        self.segmentStates.pop(segmentId, None)
+        self.undoStacks.pop(segmentId, None)
 
-        # TorchIO masked z-norm (use foreground > 0)
-        self.norm_transform = tio.ZNormalization(masking_method=lambda x: x > 0)
-
-        # ---- quality & memory knobs ----
-        self.USE_CRITIC_CONF = True   # toggle critic gating
-        self.OVERLAP = 0.625          # smoother tiling
-        self.THRESH = 0.5             # binarization threshold
-        self.PCT_CLIP = (0.5, 99.5)   # pre-norm robust clipping
-
-        # cache image shape for bounds checks
-        self.img = np.zeros((1, 1, 1))  # (D,H,W)
-
-    # ---------- util ----------
-    @staticmethod
-    def remove_module_prefix(state_dict):
-        return { (k.replace("module.", "") if k.startswith("module.") else k): v for k, v in state_dict.items() }
-
-    @staticmethod
-    def postprocess_masks_like_script(low_res_masks, image_size, original_size, ft2d=False):
-        masks = F.interpolate(low_res_masks, (image_size, image_size, image_size),
-                              mode="trilinear", align_corners=False)
-        if ft2d and min(original_size) < image_size:
-            raise NotImplementedError
-        else:
-            masks = F.interpolate(masks, original_size, mode="trilinear", align_corners=False)
-        return masks, None
-
-    def set_current_case_name(self, name: str):
-        """Store a human-readable case name for output folders and saved files."""
-        self.current_task_name = name
-
-    # ---------- torch setup ----------
-    def setupPythonRequirements(self):
+    # ---------- dependencies ----------
+    def ensureDependencies(self):
+        """Install/import PyTorch and the other required packages. Returns False if unavailable."""
+        if self.torch is not None:
+            return True
         try:
             import PyTorchUtils
         except ModuleNotFoundError:
-            slicer.util.errorDisplay("This module requires the PyTorch extension. Install it from Extensions Manager.")
+            slicer.util.errorDisplay("SAT3D requires the PyTorch extension. Install it from the Extensions Manager.")
             return False
 
-        minimumTorchVersion = "2.1"
-        minimumTorchVisionVersion = "0.16"
         torchLogic = PyTorchUtils.PyTorchUtilsLogic()
         if not torchLogic.torchInstalled():
-            slicer.util.delayDisplay("Installing PyTorch (may take several minutes)...")
-            torch_inst = torchLogic.installTorch(
+            torch = torchLogic.installTorch(
                 askConfirmation=True,
-                torchVersionRequirement=f">={minimumTorchVersion}",
-                torchvisionVersionRequirement=f">={minimumTorchVisionVersion}",
-                forceComputationBackend='cu121'
+                torchVersionRequirement=f">={MIN_TORCH_VERSION}",
+                torchvisionVersionRequirement=f">={MIN_TORCHVISION_VERSION}",
+                forceComputationBackend=TORCH_COMPUTATION_BACKEND,
             )
-            if torch_inst is None:
-                raise ValueError('PyTorch extension needs to be installed to use this module.')
+            if torch is None:
+                slicer.util.errorDisplay("PyTorch is required to run SAT3D.")
+                return False
         else:
             from packaging import version
-            if version.parse(torchLogic.torch.__version__) < version.parse(minimumTorchVersion):
-                raise ValueError(
-                    f'PyTorch {torchLogic.torch.__version__} < {minimumTorchVersion}. '
-                    f'Use "PyTorch Util" to install a compatible version.'
-                )
+            if version.parse(torchLogic.torch.__version__) < version.parse(MIN_TORCH_VERSION):
+                slicer.util.errorDisplay(
+                    f"PyTorch {torchLogic.torch.__version__} is older than the required {MIN_TORCH_VERSION}.\n"
+                    f'Use the "PyTorch Util" module to install a compatible version.')
+                return False
+
+        missing = [req for module, req in REQUIRED_PACKAGES.items() if importlib.util.find_spec(module) is None]
+        if missing:
+            if not slicer.util.confirmOkCancelDisplay(
+                    f"SAT3D requires these Python packages: {', '.join(missing)}.\nClick OK to install them now."):
+                return False
+            with slicer.util.WaitCursor():
+                slicer.util.pip_install(" ".join(f'"{m}"' for m in missing))
+
         self.torch = torchLogic.importTorch()
-        try:
-            import timm, monai, einops  # noqa
-        except ModuleNotFoundError:
-            if slicer.util.confirmOkCancelDisplay("Extra Python packages required. Install now?"):
-                slicer.util.pip_install("einops monai typer timm torchio medpy h5py yacs matplotlib")
         return True
 
-    def _empty_cache(self):
-        if self.device and "cuda" in str(self.device):
-            try: self.torch.cuda.empty_cache()
-            except Exception: pass
+    def _emptyCache(self):
+        if self.engine is not None and "cuda" in str(self.engine.device):
+            self.torch.cuda.empty_cache()
 
-    # ---------- model load ----------
-    def create_sam(self, sam_weights_path, sam_critic_weights_path, modeltype, seed, log_fname):
-        seed = int(seed)
-        self.log_file_name = log_fname
-        slicer.util.delayDisplay(f"Loading SAT3D (seed={seed}) ... ")
+    # ---------- model ----------
+    @property
+    def modelLoaded(self):
+        return self.engine is not None
 
-        if not self.setupPythonRequirements():
-            return
+    def unloadModel(self):
+        self.engine = None
+        for state in self.segmentStates.values():  # cached embeddings belong to the old model
+            state.reset_state()
+        self._emptyCache()
+        self.log("MODEL-UNLOADED")
 
-        try:
-            self.sam = sam_model_registry3D[modeltype](checkpoint=None)
-            self.critic = Discriminator()
-        except FileNotFoundError:
-            slicer.util.infoDisplay("SAT3D weights not found, use Download button")
-            self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR_IN_LOCATING_WEIGHTS")
-            return
+    def loadModel(self):
+        """Build SAT3D-plus + critic and load their weights. Returns False if dependencies are unavailable."""
+        if not self.ensureDependencies():
+            return False
+        s = self.settings
+        for path in (s.samCheckpoint, s.criticCheckpoint):
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Model weights not found: {path}\nSet the paths under Advanced.")
+        torch = self.torch
+        from segment_anything_with_swin_conf_plus.build_samswin3D import sam_model_registry3D
+        from networks import Discriminator
 
-        if self.torch.cuda.is_available():
-            self.device = "cuda:0"
-            self.sam.to(device="cuda"); self.critic.to(device="cuda")
-            self.torch.cuda.manual_seed(seed)
-        else:
-            self.device = "cpu"
-            self.torch.manual_seed(seed)
-        random.seed(seed); np.random.seed(seed)
+        torch.manual_seed(s.seed)
+        random.seed(s.seed)
+        np.random.seed(s.seed)
+        device = s.device if s.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
 
-        model_dict  = self.torch.load(sam_weights_path, map_location=self.device, weights_only=False)
-        state_dict  = self.remove_module_prefix(model_dict['model_state_dict'])
-        self.sam.load_state_dict(state_dict, strict=False)
-        del model_dict, state_dict
+        textDir = s.textEncoderDir if os.path.isdir(s.textEncoderDir) else None
+        if textDir:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        sam = self._loadWeights(sam_model_registry3D["swin2"](checkpoint=None, text_model_name=textDir), s.samCheckpoint)
+        critic = self._loadWeights(Discriminator(), s.criticCheckpoint)
+        for model in (sam, critic):
+            model.to(device).eval()
+            model.requires_grad_(False)
 
-        c_model_dict = self.torch.load(sam_critic_weights_path, map_location=self.device, weights_only=False)
-        c_state_dict = self.remove_module_prefix(c_model_dict['model_state_dict'])
-        self.critic.load_state_dict(c_state_dict, strict=False)
-        del c_model_dict, c_state_dict
+        self.engine = InferenceEngine(sam, critic, device, roi_target=128, roi_margin=s.roiMargin)
+        for state in self.segmentStates.values():
+            state.reset_state()
+        self._emptyCache()
+        self.log(f"MODEL-LOADED: device={self.deviceName()} seed={s.seed}")
+        return True
 
-        self.sam.eval(); self.critic.eval()
-        for p in self.sam.parameters(): p.requires_grad_(False)
-        for p in self.critic.parameters(): p.requires_grad_(False)
+    def _loadWeights(self, model, path):
+        checkpoint = self.torch.load(path, map_location="cpu", weights_only=False)
+        stateDict = {k.removeprefix("module."): v for k, v in checkpoint["model_state_dict"].items()}
+        result = model.load_state_dict(stateDict, strict=False)
+        if result.missing_keys:
+            raise RuntimeError(f"{os.path.basename(path)} is missing {len(result.missing_keys)} weights, "
+                               f"e.g. {result.missing_keys[:3]}. Is it the SAT3D-plus checkpoint?")
+        if result.unexpected_keys:
+            self.log(f"WEIGHTS: ignored {len(result.unexpected_keys)} unused keys in {os.path.basename(path)}")
+        return model
 
-        self._empty_cache()
-        self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] MODEL-WEIGHTS-LOADED")
-
-    # ---------- geometry ----------
-    def generateaffine(self):
-        """Use full IJK->RAS matrix and cache its inverse (RAS->IJK)."""
-        vol = self._parameterNode.GetNodeReference("fastsamInputVolume")
-        self.img = slicer.util.arrayFromVolume(vol)  # (D,H,W) for bounds checks
-
-        ijkToRAS = vtk.vtkMatrix4x4()
-        vol.GetIJKToRASMatrix(ijkToRAS)
-        self.affine = slicer.util.arrayFromVTKMatrix(ijkToRAS).astype(np.float32)
-
-        # Cache inverse for fast RAS->IJK mapping
-        self.ras_to_ijk = np.linalg.inv(self.affine).astype(np.float32)
-
-        self.origin = vol.GetOrigin()
-        self.spacing = vol.GetSpacing()
-
-    # ---------- slicer visualization ----------
-    def pass_mask_to_slicer(self):
-        segmentationNode = self._parameterNode.GetNodeReference("fastsamSegmentation")
-        volumeNode = self._parameterNode.GetNodeReference("fastsamInputVolume")
-        segmentation = segmentationNode.GetSegmentation()
-
-        if hasattr(segmentation, "SetMasterRepresentation"):
-            segmentation.SetMasterRepresentation('Binary labelmap')
-
-        defaultID = segmentation.GetSegmentIdBySegmentName("Segment_1")
-        if defaultID: segmentation.RemoveSegment(defaultID)
-
-        SEG_CURRENT, SEG_ADDED, SEG_REMOVED = "Tumor (current)", "Δ Added", "Δ Removed"
-        color_current = (1.0, 215/255.0, 0.0); color_added = (56/255.0, 163/255.0, 63/255.0); color_removed = (145/255.0, 60/255.0, 66/255.0)
-
-        segs = self.mask  # (3,D,H,W)
-        cur_bin = (segs[0] > 0.5)
-
-        labelmap = np.zeros(cur_bin.shape, dtype=np.uint8); labelmap[cur_bin] = 1
-        self.label_map = labelmap
-
-        def get_or_add(segmentation, name, color):
-            seg = segmentation.GetSegment(segmentation.GetSegmentIdBySegmentName(name))
-            if seg is None:
-                seg_id = segmentation.AddEmptySegment(name); seg = segmentation.GetSegment(seg_id)
-            else:
-                seg_id = segmentation.GetSegmentIdBySegmentName(name)
-            seg.SetColor(*color); return seg_id
-
-        seg_id_current = get_or_add(segmentation, SEG_CURRENT, color_current)
-        slicer.util.updateSegmentBinaryLabelmapFromArray((labelmap == 1).astype(np.uint8), segmentationNode, seg_id_current, volumeNode)
-
-        if self.iteration != 0 and self.prev_mask_ is not None:
-            prev_bin = (self.prev_mask_[0] > 0.5)
-            delta_added   = np.logical_and(cur_bin, np.logical_not(prev_bin)).astype(np.uint8)
-            delta_removed = np.logical_and(prev_bin, np.logical_not(cur_bin)).astype(np.uint8)
-            self._parameterNode.logger.info(f"[Diff] cur={int(cur_bin.sum())} added={int(delta_added.sum())} removed={int(delta_removed.sum())}")
-
-            if delta_added.any():
-                seg_id_added = segmentation.GetSegmentIdBySegmentName(SEG_ADDED) or segmentation.AddEmptySegment(SEG_ADDED)
-                segmentation.GetSegment(seg_id_added).SetColor(*color_added)
-                slicer.util.updateSegmentBinaryLabelmapFromArray(delta_added, segmentationNode, seg_id_added, volumeNode)
-            else:
-                sid = segmentation.GetSegmentIdBySegmentName(SEG_ADDED)
-                if sid: slicer.util.updateSegmentBinaryLabelmapFromArray(np.zeros_like(delta_added, dtype=np.uint8), segmentationNode, sid, volumeNode)
-
-            if delta_removed.any():
-                old_id = segmentation.GetSegmentIdBySegmentName(SEG_REMOVED)
-                if old_id: segmentation.RemoveSegment(old_id)
-                seg_id_removed = segmentation.AddEmptySegment(SEG_REMOVED)
-                segmentation.GetSegment(seg_id_removed).SetColor(*color_removed)
-                slicer.util.updateSegmentBinaryLabelmapFromArray(delta_removed, segmentationNode, seg_id_removed, volumeNode)
-            else:
-                sid = segmentation.GetSegmentIdBySegmentName(SEG_REMOVED)
-                if sid: slicer.util.updateSegmentBinaryLabelmapFromArray(np.zeros_like(delta_removed, dtype=np.uint8), segmentationNode, sid, volumeNode)
-        else:
-            for name in (SEG_ADDED, SEG_REMOVED):
-                sid = segmentation.GetSegmentIdBySegmentName(name)
-                if sid: slicer.util.updateSegmentBinaryLabelmapFromArray(np.zeros_like(labelmap, dtype=np.uint8), segmentationNode, sid, volumeNode)
-
-        segmentationNode.CreateDefaultDisplayNodes()
-        dispNode = segmentationNode.GetDisplayNode()
-        if dispNode:
-            if hasattr(dispNode, "SetPreferredDisplayRepresentationName2D"):
-                dispNode.SetPreferredDisplayRepresentationName2D("Binary labelmap")
-            if hasattr(dispNode, "SetVisibility2D"): dispNode.SetVisibility2D(True)
-            if hasattr(dispNode, "SetVisibility2DFill"): dispNode.SetVisibility2DFill(True)
-            if hasattr(dispNode, "SetVisibility2DOutline"): dispNode.SetVisibility2DOutline(False)
-            if hasattr(dispNode, "SetSmoothingFactor"): dispNode.SetSmoothingFactor(0.0)
-            if hasattr(dispNode, "SetPreferredDisplayRepresentationName3D"):
-                dispNode.SetPreferredDisplayRepresentationName3D('Closed surface')
-
-        segmentationNode.CreateClosedSurfaceRepresentation()
-        slicer.app.layoutManager().setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutFourUpView)
-        slicer.util.resetThreeDViews()
-
-        self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SEGMENTS-LOADED")
-        self.prev_mask_ = self.mask.copy()
-
-    # ---------- saving ----------
-    def maybeSaveSegmentation(self):
-        case_name = self.current_task_name or "Case"
-        output_path = os.path.join(self.download_location, case_name)
-        self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] CREATED-PATH: {output_path}")
-        os.makedirs(output_path, exist_ok=True)
-        self.out_dir = output_path
-
-        if self.save_points is not None and self.save_labels is not None:
-            pts = self.save_points.detach().cpu().numpy(); lbs = self.save_labels.detach().cpu().numpy()
-            points_file_name = os.path.join(output_path, f"{case_name}_{self.iteration}_{datetime.now().strftime('%Y-%m-%d %H%M%S')}_points.txt")
-            with open(points_file_name, 'w') as f:
-                for pt, label in zip(pts.squeeze(0), lbs.squeeze(0)):
-                    coord_str = ', '.join(f'{x:.1f}' for x in pt); f.write(f'{coord_str}; {int(label)}\n')
-            del pts, lbs
-            self.save_points = None; self.save_labels = None
-
-        file_name = f"{case_name}_{self.iteration}_{datetime.now().strftime('%Y-%m-%d %H%M%S')}.nii.gz"
-        self.saveSegmentationAsNifti(output_path=output_path, file_name=file_name)
-
-    def saveSegmentationAsNifti(self, output_path=None, file_name=None):
-        if not hasattr(self, "label_map") or self.label_map is None:
-            slicer.util.errorDisplay("Label map not found. Run segmentation first."); return
-        out_path = os.path.join(output_path, file_name)
-        flipped = np.flip(self.label_map, axis=(1, 2))
-        sitk_mask = sitk.GetImageFromArray(flipped.astype(np.uint8))
-
-        refVolumeNode = self._parameterNode.GetNodeReference("fastsamInputVolume")
-        spacing = refVolumeNode.GetSpacing(); origin = refVolumeNode.GetOrigin()
-        ijkToRAS = vtk.vtkMatrix4x4(); refVolumeNode.GetIJKToRASMatrix(ijkToRAS)
-        direction = [ijkToRAS.GetElement(row, col) / spacing[row] for col in range(3) for row in range(3)]
-
-        sitk_mask.SetSpacing(spacing); sitk_mask.SetOrigin(origin); sitk_mask.SetDirection(direction)
-        sitk.WriteImage(sitk_mask, out_path)
-        self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] NIFTI-SAVED: {out_path}")
-        slicer.util.infoDisplay(f"Segmentation saved to: {out_path}")
-        del sitk_mask, flipped, direction
-        self._empty_cache()
-
-    def endRefinementTask(self):
-        self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] END-TASK")
-        log_file_path = os.path.join(self.download_location, self.log_file_name)
-        if getattr(self, "out_dir", None):
-            try: shutil.copy2(log_file_path, self.out_dir)
-            except Exception: pass
-        slicer.util.infoDisplay("TASK-COMPLETED")
-        self._empty_cache(); slicer.app.restart()
+    def deviceName(self):
+        if self.engine is None:
+            return "not loaded"
+        device = str(self.engine.device)
+        if "cuda" in device:
+            try:
+                return f"cuda ({self.torch.cuda.get_device_name(0)})"
+            except Exception:
+                return "cuda"
+        return device
 
     # ---------- inference ----------
-    def get_volume_node(self):
-        return self._parameterNode.GetNodeReference("fastsamInputVolume")
+    def _normalizedVolume(self, volumeNode):
+        key = (volumeNode.GetID(), volumeNode.GetImageData().GetMTime())
+        if self._normVolumeKey != key:
+            self._normVolume = None
+            self._normVolumeKey = key
+        return self._normVolume
 
-    def inference(self, input, model, patch_size, low_res_prev_masks, points, low_res_conf):
-        torch = self.torch
-        use_amp = bool(VAL_AMP and (self.device and "cuda" in str(self.device)))
-        ctx = (torch.amp.autocast('cuda') if use_amp else contextlib.nullcontext())
-        with torch.inference_mode():
-            with ctx:
-                return sliding_window_inference(
-                    inputs=input,
-                    roi_size=patch_size,
-                    sw_batch_size=1,
-                    predictor=model,
-                    points=points,
-                    low_res_prev_masks=low_res_prev_masks,
-                    overlap=self.OVERLAP,
-                    low_res_conf=low_res_conf
-                )
+    @property
+    def busy(self):
+        return self._job is not None and self._job["thread"].is_alive()
 
-    def get_mask(self):
-        try:
-            vol_node = self.get_volume_node()
-            if vol_node is None:
-                self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] PREDICT-FAILED: No input volume.")
-                return
-            if self.current_task_name is None:
-                self.current_task_name = vol_node.GetName()
+    def startPrediction(self, volumeNode, segmentId, prompts: Prompts):
+        """Start a run on a worker thread. Poll ``pollPrediction`` from the main thread for the result."""
+        if not self.modelLoaded:
+            raise RuntimeError("SAT3D model is not loaded.")
+        if self.busy:
+            raise RuntimeError("A prediction is already running.")
+        if not prompts.hasSpatial:
+            raise ValueError("Add at least one point, scribble or box first -- text alone can't localise a lesion.")
+        state = self.segmentState(segmentId)
+        stack = self.undoStacks.setdefault(segmentId, [])
+        stack.append(state.snapshot())
+        del stack[:-UNDO_DEPTH]
 
-            # -------- data prep: clip + TorchIO ZNorm --------
-            arr = slicer.util.arrayFromVolume(vol_node)  # (D,H,W)
-            fg = arr > 0
-            if np.any(fg):
-                lo, hi = np.percentile(arr[fg], self.PCT_CLIP)
-                arr = np.clip(arr, lo, hi)
-            inputimage = arr[np.newaxis, np.newaxis, ...]  # (1,1,D,H,W)
+        normVolume = self._normalizedVolume(volumeNode)
+        rawVolume = None if normVolume is not None else slicer.util.arrayFromVolume(volumeNode).copy()
+        job = {"segmentId": segmentId, "prompts": prompts, "start": time.time(),
+               "result": None, "error": None, "previousMask": state.full_mask}
 
-            torch = self.torch
-            inputimage_tensor = torch.as_tensor(inputimage, dtype=torch.float32)
+        def work():
+            try:
+                volume = normVolume
+                if volume is None:
+                    volume = preprocess_volume(rawVolume)
+                    job["normVolume"] = volume
+                job["result"] = self.engine.run(volume, state, prompts)
+            except Exception as e:
+                import traceback
+                job["error"] = e
+                job["traceback"] = traceback.format_exc()
+            finally:
+                self._emptyCache()
 
-            # TorchIO expects (C, D, H, W); squeeze/add back batch
-            tio_img = tio.ScalarImage(tensor=inputimage_tensor.squeeze(0))
-            tio_img = self.norm_transform(tio_img)
-            inputimage_tensor = tio_img.data.unsqueeze(0)  # (1,1,D,H,W)
-            del tio_img
+        job["thread"] = threading.Thread(target=work, name="SAT3D-inference", daemon=True)
+        self._job = job
+        job["thread"].start()
 
-            # ---- shapes and device move ----
-            roi_size = (self.image_size, self.image_size, self.image_size)
-            input_pv = torch.empty(inputimage.shape[0], 1, inputimage.shape[2], inputimage.shape[3], inputimage.shape[4])
+    def pollPrediction(self, volumeNode, segmentationNode, wait=0.08):
+        """None while running; otherwise finishes the run on the main thread and returns the job dict.
 
-            if self.device and "cuda" in str(self.device):
-                inputimage_tensor = inputimage_tensor.pin_memory().to(self.device, non_blocking=True)
-            else:
-                inputimage_tensor = inputimage_tensor.to(self.device)
+        Waits up to ``wait`` seconds for the worker: Slicer's main thread holds the GIL while idle in the
+        Qt event loop, so the worker only makes progress while the main thread is blocked here.
+        """
+        job = self._job
+        if job is None:
+            return None
+        job["thread"].join(timeout=wait)
+        if job["thread"].is_alive():
+            return None
+        self._job = None
+        job["elapsed"] = time.time() - job["start"]
+        segmentId, prompts = job["segmentId"], job["prompts"]
+        if "normVolume" in job:
+            self._normVolume = job["normVolume"]
+        if job["error"] is not None:
+            self.undo(None, None, segmentId, display=False)  # drop the snapshot taken for this run
+            self.log(f"RUN-FAILED: {job['error']}")
+            return job
 
-            # ---- prompts: compute true deltas ----
-            def _to_tuple_int(p): return (int(p[0]), int(p[1]), int(p[2]))
-            cur_inc_set = set(_to_tuple_int(c) for c in self.include_coords.values()) if self.include_coords else set()
-            cur_exc_set = set(_to_tuple_int(c) for c in self.exclude_coords.values()) if self.exclude_coords else set()
-            new_inc = list(cur_inc_set) # - self._prev_include_set)
-            new_exc = list(cur_exc_set) #- self._prev_exclude_set)
-            do_initial = (self.iteration == 0 and not cur_inc_set and not cur_exc_set)
+        mask, tightened = job["result"]
+        state = self.segmentState(segmentId)
+        self.showSegment(volumeNode, segmentationNode, segmentId, mask, job["previousMask"])
+        segmentName = segmentationNode.GetSegmentation().GetSegment(segmentId).GetName()
+        if self.settings.autoSaveRuns:
+            self._saveRun(volumeNode, segmentName, state.iteration, mask, prompts)
+        self.log(f"RUN: segment={segmentName} points={len(prompts.points)} "
+                    f"box={'yes' if prompts.box else 'no'} text={prompts.text} "
+                    f"took={job['elapsed']:.1f}s tightened={tightened} voxels={int(mask.sum())}")
+        state.iteration += 1
+        job["tightened"] = tightened
+        return job
 
-            # ---- low-res state ----
-            if do_initial:
-                prev_masks = torch.zeros_like(input_pv, device=self.device)
-                prev_low_res_mask = F.interpolate(prev_masks.float(), size=(roi_size[0] // 4, roi_size[0] // 4, roi_size[0] // 4))
-                if self.USE_CRITIC_CONF:
-                    conf_map = torch.sigmoid(self.critic(torch.sigmoid(prev_masks).float()))
-                    low_res_conf = F.interpolate(conf_map, size=(roi_size[0] // 4, roi_size[0] // 4, roi_size[0] // 4))
-                    del conf_map
-                else:
-                    low_res_conf = torch.zeros_like(prev_low_res_mask)
+    def rethreshold(self, volumeNode, segmentationNode, segmentId, threshold):
+        state = self.segmentState(segmentId)
+        state.threshold = threshold
+        mask = InferenceEngine.binarize(volumeShape(volumeNode), state)
+        if mask is not None:
+            state.full_mask = mask
+            self.showSegment(volumeNode, segmentationNode, segmentId, mask, None)
+        return mask is not None
 
-                output = self.inference(
-                    inputimage_tensor, self.sam, roi_size,
-                    low_res_prev_masks=prev_low_res_mask,
-                    points=None,
-                    low_res_conf=low_res_conf
-                )
-                del prev_masks, prev_low_res_mask, low_res_conf
-                self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] AI-PRED: initial")
-            else:
-                if (new_inc or new_exc):
-                    points_np = np.array(new_inc + new_exc, dtype=np.int32)
-                    labels_np = np.array([1] * len(new_inc) + [0] * len(new_exc), dtype=np.int64)
-                    points_t  = torch.from_numpy(points_np).to(self.device).unsqueeze(0)
-                    labels_t  = torch.from_numpy(labels_np).to(self.device).unsqueeze(0)
-                    self.save_points, self.save_labels = points_t, labels_t
-                else:
-                    points_t, labels_t = None, None
+    def undo(self, volumeNode, segmentationNode, segmentId, display=True):
+        """Restore the state before the last run of ``segmentId``. Returns False if there is nothing to undo."""
+        stack = self.undoStacks.get(segmentId)
+        if not stack:
+            return False
+        state = self.segmentState(segmentId)
+        state.restore(stack.pop())
+        if display:
+            mask = state.full_mask if state.full_mask is not None else np.zeros(volumeShape(volumeNode), np.uint8)
+            self.showSegment(volumeNode, segmentationNode, segmentId, mask, None)
+            name = segmentationNode.GetSegmentation().GetSegment(segmentId).GetName()
+            self.log(f"UNDO: segment={name} iteration={state.iteration}")
+        return True
 
-                prev_lr_src = self.visible_prev_mask if self.visible_prev_mask is not None \
-                              else torch.zeros_like(input_pv, device=self.device)
-                prev_low_res_mask = F.interpolate(prev_lr_src.float(), size=(roi_size[0] // 4, roi_size[0] // 4, roi_size[0] // 4))
+    def clearSegment(self, volumeNode, segmentationNode, segmentId):
+        self.forgetSegment(segmentId)
+        self.showSegment(volumeNode, segmentationNode, segmentId, np.zeros(volumeShape(volumeNode), np.uint8), None)
 
-                if self.USE_CRITIC_CONF:
-                    conf_map = torch.sigmoid(self.critic(torch.sigmoid(prev_lr_src).float()))
-                    low_res_conf = F.interpolate(conf_map, size=(roi_size[0] // 4, roi_size[0] // 4, roi_size[0] // 4))
-                    del conf_map
-                else:
-                    low_res_conf = torch.zeros_like(prev_low_res_mask)
+    # ---------- display ----------
+    def showSegment(self, volumeNode, segmentationNode, segmentId, mask, previousMask=None):
+        """Write ``mask`` into the segment, and the voxels added/removed since ``previousMask`` into Δ segments."""
+        segmentation = segmentationNode.GetSegmentation()
+        segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(volumeNode)
+        slicer.util.updateSegmentBinaryLabelmapFromArray(mask, segmentationNode, segmentId, volumeNode)
 
-                self._parameterNode.logger.info(
-                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] DELTA-POINTS: +inc={len(new_inc)} +exc={len(new_exc)}"
-                )
-                output = self.inference(
-                    inputimage_tensor, self.sam, roi_size,
-                    low_res_prev_masks=prev_low_res_mask,
-                    points=[points_t, labels_t] if points_t is not None else None,
-                    low_res_conf=low_res_conf
-                )
-                del prev_lr_src, prev_low_res_mask, low_res_conf
-                self._parameterNode.logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] AI-PRED: delta")
+        current = mask > 0
+        previous = previousMask > 0 if previousMask is not None else current
+        for name, delta in ((SEG_ADDED, current & ~previous), (SEG_REMOVED, previous & ~current)):
+            deltaId = segmentation.GetSegmentIdBySegmentName(name)
+            if not delta.any() and not deltaId:
+                continue
+            if not deltaId:
+                deltaId = segmentation.AddEmptySegment("", name, DELTA_COLORS[name])
+            slicer.util.updateSegmentBinaryLabelmapFromArray(delta.astype(np.uint8), segmentationNode, deltaId, volumeNode)
 
-            # ---- postproc ----
-            out_list = decollate_batch(output)
-            # cache prev mask for next round (torch)
-            self.visible_prev_mask = out_list[0].unsqueeze(0)
-            if self.device and "cuda" in str(self.device):
-                self.visible_prev_mask = self.visible_prev_mask.to(self.device, dtype=self.torch.float16, non_blocking=True)
-            else:
-                self.visible_prev_mask = self.visible_prev_mask.to(self.device)
+        segmentationNode.CreateDefaultDisplayNodes()
+        displayNode = segmentationNode.GetDisplayNode()
+        displayNode.SetPreferredDisplayRepresentationName2D("Binary labelmap")
+        if not segmentation.ContainsRepresentation("Closed surface"):
+            segmentationNode.CreateClosedSurfaceRepresentation()
+            layoutManager = slicer.app.layoutManager()
+            if layoutManager is not None:  # None when running without a main window
+                if layoutManager.layout != slicer.vtkMRMLLayoutNode.SlicerLayoutFourUpView:
+                    layoutManager.setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutFourUpView)
+                slicer.util.resetThreeDViews()
 
-            # sigmoid -> threshold once; CPU to free VRAM
-            prob = self.torch.sigmoid(out_list[0])
-            mask_np = (prob.detach().cpu().numpy() > self.THRESH).astype(np.uint8)
+    def updateUncertaintyVolume(self, volumeNode, segmentId, uncertaintyNode=None):
+        """Write the segment's critic uncertainty into a scalar volume (created if needed); None if not run."""
+        uncertainty = InferenceEngine.uncertainty_map(volumeShape(volumeNode), self.segmentState(segmentId))
+        if uncertainty is None:
+            return None
+        if uncertaintyNode is None:
+            uncertaintyNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", "SAT3D uncertainty")
+            uncertaintyNode.SetHideFromEditors(True)
+        uncertaintyNode.CopyOrientation(volumeNode)
+        if uncertaintyNode.GetParentTransformNode() != volumeNode.GetParentTransformNode():
+            uncertaintyNode.SetAndObserveTransformNodeID(volumeNode.GetTransformNodeID())
+        slicer.util.updateVolumeFromArray(uncertaintyNode, np.nan_to_num(uncertainty, nan=-1.0).astype(np.float32))
+        uncertaintyNode.CreateDefaultDisplayNodes()
+        display = uncertaintyNode.GetDisplayNode()
+        display.SetAndObserveColorNodeID(self._uncertaintyColorNode().GetID())
+        display.AutoWindowLevelOff()
+        display.SetWindowLevelMinMax(0.0, 1.0)
+        display.SetApplyThreshold(True)  # unscored voxels (-1) become transparent
+        display.SetThreshold(0.0, 1.0)
+        display.SetInterpolate(False)
+        return uncertaintyNode
 
-            # ensure (3,D,H,W), ch0 current
-            seg_3 = np.zeros((3,) + mask_np.shape[-3:], dtype=np.uint8)
-            seg_3[0] = mask_np.squeeze()
+    @staticmethod
+    def _uncertaintyColorNode():
+        """Blue (relatively certain) -> red (relatively likely mis-segmented)."""
+        name = "SAT3D uncertainty colors"
+        node = slicer.mrmlScene.GetFirstNodeByName(name)
+        if node is None:
+            node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLProceduralColorNode", name)
+            node.SetHideFromEditors(True)
+            node.SetAttribute("Category", "SAT3D")
+            ctf = node.GetColorTransferFunction()
+            ctf.AddRGBPoint(0.0, 50 / 255, 110 / 255, 230 / 255)
+            ctf.AddRGBPoint(1.0, 230 / 255, 50 / 255, 50 / 255)
+        return node
 
-            # free
-            del out_list, output, inputimage_tensor, inputimage, arr, mask_np, prob
-            self._empty_cache()
+    # ---------- measurements / review ----------
+    @staticmethod
+    def resultSegmentIds(segmentationNode):
+        """Segment IDs that hold results (excludes the Δ change overlays)."""
+        segmentation = segmentationNode.GetSegmentation()
+        return [s for s in segmentation.GetSegmentIDs() if segmentation.GetSegment(s).GetName() not in DELTA_SEGMENT_NAMES]
 
-            self.mask = seg_3
-            self.pass_mask_to_slicer()
-            self.maybeSaveSegmentation()
+    def measurements(self, volumeNode, segmentationNode):
+        """[(segmentId, name, SegmentMeasurements | None, approved)] for every result segment."""
+        rows = []
+        segmentation = segmentationNode.GetSegmentation()
+        for segmentId in self.resultSegmentIds(segmentationNode):
+            segment = segmentation.GetSegment(segmentId)
+            mask = slicer.util.arrayFromSegmentBinaryLabelmap(segmentationNode, segmentId, volumeNode)
+            measured = measure_mask(mask, volumeNode.GetSpacing()) if mask is not None else None
+            rows.append((segmentId, segment.GetName(), measured, self.isApproved(segment)))
+        return rows
 
-            # history & iter
-            self._prev_include_set = cur_inc_set
-            self._prev_exclude_set = cur_exc_set
-            self.iteration += 1
+    @staticmethod
+    def isApproved(segment):
+        tag = vtk.reference("")
+        return segment.GetTag(APPROVED_TAG, tag) and str(tag) == "1"
 
-        finally:
-            self._empty_cache()
+    def setApproved(self, segmentationNode, segmentId, approved=True):
+        segment = segmentationNode.GetSegmentation().GetSegment(segmentId)
+        segment.SetTag(APPROVED_TAG, "1" if approved else "0")
+        segmentationNode.Modified()
+        self.log(f"{'APPROVED' if approved else 'UNAPPROVED'}: segment={segment.GetName()}")
 
-    # ---------- misc ----------
-    def backup_mask(self):
-        self.mask = slicer.util.arrayFromSegmentBinaryLabelmap(
-            self._parameterNode.GetNodeReference("fastsamSegmentation"),
-            self._parameterNode.GetParameter("fastsamCurrentSegment"))
+    # ---------- saving ----------
+    def _saveRun(self, volumeNode, segmentName, iteration, mask, prompts):
+        os.makedirs(self.sessionDir, exist_ok=True)
+        stem = f"{safeName(self.caseName)}_{safeName(segmentName)}_{iteration}_{datetime.now().strftime('%Y-%m-%d %H%M%S')}"
+        saveMaskAsNifti(mask, volumeNode, os.path.join(self.sessionDir, f"{stem}.nii.gz"))
+        self._writeProvenance(os.path.join(self.sessionDir, f"{stem}_prompts.json"), segmentName, prompts, None)
 
-    def undo(self):
-        if self.mask_backup is not None:
-            self.mask = self.mask_backup.copy()
-            self.pass_mask_to_slicer()
+    def _writeProvenance(self, path, segmentName, prompts, segmentId):
+        state = self.segmentStates.get(segmentId) if segmentId else None
+        data = {
+            "segment": segmentName,
+            "points": [{"coord_dhw": list(c), "positive": p} for c, p in prompts.points],
+            "box": {"min_corner_dhw": list(prompts.box[0]), "max_corner_dhw": list(prompts.box[1])} if prompts.box else None,
+            "text": prompts.text,
+            "roi_bounds": list(state.roi_bounds) if state and state.roi_bounds else None,
+            "threshold": state.threshold if state else None,
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def saveSegmentation(self, volumeNode, segmentationNode, outDir, promptsBySegment):
+        """Multi-label NIfTI (result segment i -> label i) plus a prompt-provenance JSON per segment."""
+        os.makedirs(outDir, exist_ok=True)
+        segmentation = segmentationNode.GetSegmentation()
+        combined = np.zeros(volumeShape(volumeNode), dtype=np.uint8)
+        labels = {}
+        for label, segmentId in enumerate(self.resultSegmentIds(segmentationNode), start=1):
+            mask = slicer.util.arrayFromSegmentBinaryLabelmap(segmentationNode, segmentId, volumeNode)
+            if mask is not None:
+                combined[mask > 0] = label
+            segment = segmentation.GetSegment(segmentId)
+            labels[label] = {"segment": segment.GetName(), "approved": self.isApproved(segment)}
+            prompts = promptsBySegment.get(segmentId)
+            if prompts is not None and (prompts.points or prompts.box or prompts.text):
+                self._writeProvenance(os.path.join(outDir, f"{safeName(self.caseName)}_{safeName(segment.GetName())}_prompts.json"),
+                                      segment.GetName(), prompts, segmentId)
+        path = os.path.join(outDir, f"{safeName(self.caseName)}_seg.nii.gz")
+        saveMaskAsNifti(combined, volumeNode, path)
+        with open(os.path.join(outDir, f"{safeName(self.caseName)}_seg_labels.json"), "w", encoding="utf-8") as f:
+            json.dump(labels, f, indent=2)
+        self.log(f"SAVED: {path}")
+        return path
