@@ -5,9 +5,9 @@ project(sat3D)
 #-----------------------------------------------------------------------------
 # Extension meta-information
 set(EXTENSION_HOMEPAGE "https://www.slicer.org/wiki/Documentation/Nightly/Extensions/sat3D")
-set(EXTENSION_CATEGORY "segment")
+set(EXTENSION_CATEGORY "Segmentation")
 set(EXTENSION_CONTRIBUTORS "Himashi Peiris")
-set(EXTENSION_DESCRIPTION "This is an example of a simple extension")
+set(EXTENSION_DESCRIPTION "SAT3D: interactive 3D tumour segmentation with a Swin-based SAM model and critic-guided refinement.")
 set(EXTENSION_ICONURL "https://www.example.com/Slicer/Extensions/sat3D.png")
 set(EXTENSION_SCREENSHOTURLS "https://www.example.com/Slicer/Extensions/fastsam/Screenshots/1.png")
 set(EXTENSION_DEPENDS "NA") # Specified as a list or "NA" if no dependencies
